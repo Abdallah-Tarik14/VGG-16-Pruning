@@ -3,6 +3,7 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import numpy as np
 import torch
+from torch.utils.data.sampler import SubsetRandomSampler
 
 """
 OPTIMIZATION HIGHLIGHTS:
@@ -158,8 +159,6 @@ def get_val_loader(args, validation_split=0.1):
     Returns:
         DataLoader for validation data
     """
-    from torch.utils.data.sampler import SubsetRandomSampler
-    
     if args.dataset == 'cifar10':
         transform_val = transforms.Compose([
             transforms.ToTensor(),

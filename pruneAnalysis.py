@@ -404,83 +404,56 @@ def prune_retrain_analysis(args):
     if os.path.exists(load_path):
         new_net.load_state_dict(torch.load(load_path))
         
-    top1_org, top5_org, loss, infer_time = eval_epoch(new_net, test_loader)
+    top1_org, top5_org, loss_org, infer_time_org = eval_epoch(new_net, test_loader)
+    print(f"Original model: Top1 {top1_org:.2%}, Top5 {top5_org:.2%}, Time {infer_time_org:.3f}ms")
     
-    layers, total_channels = get_list(args.net, args.shortcutflag)
-    independentflag = False
-    max_prune_ratio = 0.90
-    min_prune_ratio = 0.20
+    # Test different global pruning ratios
+    prune_ratios = [0.1, 0.2, 0.3, 0.4, 0.5]
+    top1_results = [top1_org]
+    top5_results = [top5_org]
+    infer_times = [infer_time_org]
     
-    accuracy1 = {}
-    accuracy5 = {}
-    
-    # For all layers
-    for conv, channels in zip(layers, total_channels):
-        accuracy1[conv] = [top1_org]
-        accuracy5[conv] = [top5_org]
-        
-        prune_layers = [conv]
-        prune_channels = np.linspace(int(channels * min_prune_ratio), int(channels * max_prune_ratio), 8, dtype=int).tolist()
-        
-        # For each layer
-        for index, prune_channel in enumerate(prune_channels):
-            # Get net and prune
-            new_net = get_net(args.net)
-            if os.path.exists(load_path):
-                new_net.load_state_dict(torch.load(load_path))
-                
-            new_net = prune_net(new_net, independentflag, prune_layers, [prune_channel], args.net, args.shortcutflag)
+    for ratio in prune_ratios:
+        # Get fresh network
+        new_net = get_net(args.net)
+        if os.path.exists(load_path):
+            new_net.load_state_dict(torch.load(load_path))
             
-            # Retrain
-            new_net = filter_retrain(new_net, conv + ':pruned %d' % prune_channel)
-            
-            # Eval
-            top1, top5, loss, infer_time = eval_epoch(new_net, test_loader)
-            print("Eval after pruning" + conv, index, ":\t Loss:{:.3f}\t acc1:{:.3%}\t acc5:{:.3%}\t "
-                 "Inference time:{:.3}\n".format(loss, top1, top5, infer_time / len(test_loader.dataset)))
-                 
-            accuracy1[conv].append(top1)
-            accuracy5[conv].append(top5)
-            
-    with open('top1_backup', 'w') as fout:
-        json.dump(accuracy1, fout)
-    with open('top5_backup', 'w') as fout:
-        json.dump(accuracy5, fout)
+        # Apply global pruning
+        pruned_net = global_pruning(new_net, ratio, args.net, args.shortcutflag)
         
-    # OPTIMIZATION: Enhanced visualization
+        # Evaluate
+        top1, top5, loss, infer_time = eval_epoch(pruned_net, test_loader)
+        print(f"Global pruning {ratio:.1f}: Top1 {top1:.2%}, Top5 {top5:.2%}, Time {infer_time:.3f}ms")
+        
+        top1_results.append(top1)
+        top5_results.append(top5)
+        infer_times.append(infer_time)
+        
+    # Visualize results
     plt.figure(figsize=(12, 8))
-    for index, (conv, acc1) in enumerate(accuracy1.items()):
-        line_style = colors[index % len(colors)] + lines[index // len(colors) % len(lines)] + 'o'
-        xs = np.linspace(0, 90, len(acc1))
-        plt.plot(xs, acc1, line_style, label=conv+' '+str(total_channels[index]))
-        
-    plt.title("Data: %s" % args.dataset + ", Model: %s" % args.net + 
-             ", pruned smallest filters and retrained", fontsize=14)
-    plt.ylabel("Accuracy (top1)", fontsize=12)
-    plt.xlabel("Filters Pruned Away (%)", fontsize=12)
-    plt.legend(loc='upper right')
-    plt.xlim([0, 100])
-    plt.grid(alpha=0.3)
-    plt.savefig(shortcut+args.dataset + "_pruned_retrained_top1.png", bbox_inches='tight', dpi=300)
-    plt.show()
+    xs = [0] + prune_ratios
     
-    plt.figure(figsize=(12, 8))
-    for index, (conv, acc5) in enumerate(accuracy5.items()):
-        line_style = colors[index % len(colors)] + lines[index // len(colors) % len(lines)] + 'o'
-        xs = np.linspace(0, 90, len(acc5))
-        plt.plot(xs, acc5, line_style, label=conv + ' ' + str(total_channels[index]))
-        
-    plt.title("Data: %s" % args.dataset + ", Model: %s" % args.net + 
-             ", pruned smallest filters and retrained", fontsize=14)
-    plt.ylabel("Accuracy (top5)", fontsize=12)
-    plt.xlabel("Filters Pruned Away (%)", fontsize=12)
-    plt.legend(loc='upper right')
-    plt.xlim([0, 100])
+    plt.subplot(2, 1, 1)
+    plt.plot(xs, top1_results, 'ro-', label='Top-1 Accuracy')
+    plt.plot(xs, top5_results, 'bo-', label='Top-5 Accuracy')
+    plt.title(f"Global Pruning Analysis - {args.net}", fontsize=14)
+    plt.ylabel("Accuracy", fontsize=12)
+    plt.legend()
     plt.grid(alpha=0.3)
-    plt.savefig(shortcut+args.dataset + "_pruned_retrained_top5.png", bbox_inches='tight', dpi=300)
+    
+    plt.subplot(2, 1, 2)
+    plt.plot(xs, infer_times, 'go-', label='Inference Time')
+    plt.xlabel("Global Pruning Ratio", fontsize=12)
+    plt.ylabel("Inference Time (ms)", fontsize=12)
+    plt.legend()
+    plt.grid(alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(args.net + "_" + shortcut + "global_pruning_analysis.png", bbox_inches='tight', dpi=300)
     plt.show()
 
-# OPTIMIZATION: Global Pruning Analysis
+# OPTIMIZATION: Added global pruning analysis function
 def global_pruning_analysis(args):
     """
     Analyze the effect of global pruning on model performance.
@@ -490,19 +463,17 @@ def global_pruning_analysis(args):
     """
     load_path = os.path.join(CHECK_POINT_PATH, args.net, "train", "bestParam.pth")
     test_loader = get_test_loader(args)
-    train_loader = get_train_loader(args)
     
     if args.shortcutflag:
         shortcut = "shortcut_"
     else:
         shortcut = ""
         
-    # Get original network and evaluate
-    net = get_net(args.net)
+    new_net = get_net(args.net)
     if os.path.exists(load_path):
-        net.load_state_dict(torch.load(load_path))
+        new_net.load_state_dict(torch.load(load_path))
         
-    top1_org, top5_org, loss_org, infer_time_org = eval_epoch(net, test_loader)
+    top1_org, top5_org, loss_org, infer_time_org = eval_epoch(new_net, test_loader)
     print(f"Original model: Top1 {top1_org:.2%}, Top5 {top5_org:.2%}, Time {infer_time_org:.3f}ms")
     
     # Test different global pruning ratios
