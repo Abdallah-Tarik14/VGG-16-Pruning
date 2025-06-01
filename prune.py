@@ -4,6 +4,7 @@ import numpy as np
 import os
 import copy
 from tools.flops_params import get_flops_params
+from train import eval_epoch
 
 """
 OPTIMIZATION HIGHLIGHTS:
@@ -475,22 +476,23 @@ def prune_net(model, independentflag, prune_layers, prune_channels, net_name, sh
         raise
 
 # OPTIMIZATION: Added function for layer sensitivity analysis
-def analyze_layer_sensitivity(model, test_loader, net_name, device, criterion="l1"):
+def analyze_layer_sensitivity(model, train_loader, test_loader, layers, prune_ratio=0.3):
     """
     Analyze the sensitivity of each layer to pruning.
     
     Args:
         model: Neural network model
+        train_loader: Training data loader
         test_loader: Test data loader
-        net_name: Name of the network architecture
-        device: Device to use (CPU or GPU)
-        criterion: Pruning criterion ('l1', 'l2', 'l1_l2')
+        layers: List of layer names to analyze
+        prune_ratio: Ratio of channels to prune for sensitivity analysis
         
     Returns:
         Dictionary mapping layer names to sensitivity scores
     """
     try:
-        from train import eval_epoch
+        # Determine device
+        device = next(model.parameters()).device
         
         # Get baseline accuracy
         baseline_acc, _, _, _ = eval_epoch(model, test_loader)
@@ -499,25 +501,30 @@ def analyze_layer_sensitivity(model, test_loader, net_name, device, criterion="l
         sensitivity = {}
         
         # Analyze each layer
-        if net_name == 'vgg16':
-            features = model.module.features if hasattr(model, 'module') else model.features
-            for i, layer in enumerate(features):
-                if isinstance(layer, nn.Conv2d):
-                    # Create a copy of the model
-                    pruned_model = copy.deepcopy(model)
-                    
-                    # Prune 10% of channels
-                    num_channels = max(1, int(layer.out_channels * 0.1))
-                    pruned_model = prune_vgg16_conv_layer(pruned_model, i, num_channels, device, criterion)
-                    
-                    # Evaluate pruned model
-                    pruned_acc, _, _, _ = eval_epoch(pruned_model, test_loader)
-                    
-                    # Calculate sensitivity
-                    sensitivity[f"conv_{i}"] = baseline_acc - pruned_acc
-        else:  # resnet34
-            # Implementation for ResNet34 would go here
-            pass
+        for layer in layers:
+            # Create a copy of the model
+            pruned_model = copy.deepcopy(model)
+            
+            # Prune the layer
+            if "conv" in layer:
+                # Extract layer index from layer name
+                layer_index = int(layer.split('_')[1])
+                
+                # Get the convolutional layer
+                features = pruned_model.module.features if hasattr(pruned_model, 'module') else pruned_model.features
+                conv = features[layer_index]
+                
+                # Calculate number of channels to prune
+                num_channels = max(1, int(conv.out_channels * prune_ratio))
+                
+                # Prune the layer
+                pruned_model = prune_vgg16_conv_layer(pruned_model, layer_index, num_channels, device)
+            
+            # Evaluate pruned model
+            pruned_acc, _, _, _ = eval_epoch(pruned_model, test_loader)
+            
+            # Calculate sensitivity
+            sensitivity[layer] = baseline_acc - pruned_acc
         
         return sensitivity
     except Exception as e:

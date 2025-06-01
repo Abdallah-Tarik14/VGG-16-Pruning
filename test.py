@@ -480,13 +480,13 @@ def test_quantization(args):
         model_quantized = torch.quantization.convert(model_prepared)
         
         # Test quantized model
-        print("Testing quantized model...")
+        print("\nTesting quantized model...")
         quantized_results = test_model(model_quantized, test_loader, args)
         
         # Compare results
         print("\nComparison of original vs quantized model:")
         print("Model     | Top-1 Acc | Top-5 Acc | FLOPs (M) | Params (M) | Inference (ms)")
-        print("-" * 80)
+        print("-" * 75)
         print("Original  | {:.2f}%    | {:.2f}%    | {:.2f}     | {:.2f}      | {:.2f}".format(
             original_results['top1'] * 100,
             original_results['top5'] * 100,
@@ -502,89 +502,43 @@ def test_quantization(args):
             quantized_results['params'] / 1e6,
             quantized_results['infer_time']
         ))
-        
-        # Calculate model size
-        import os
-        import tempfile
-        
-        # Save original model
-        with tempfile.NamedTemporaryFile() as f:
-            torch.save(model.state_dict(), f.name)
-            original_size = os.path.getsize(f.name) / (1024 * 1024)  # Size in MB
-        
-        # Save quantized model
-        with tempfile.NamedTemporaryFile() as f:
-            torch.save(model_quantized.state_dict(), f.name)
-            quantized_size = os.path.getsize(f.name) / (1024 * 1024)  # Size in MB
-        
-        print(f"Original model size: {original_size:.2f} MB")
-        print(f"Quantized model size: {quantized_size:.2f} MB")
-        print(f"Size reduction: {(1 - quantized_size / original_size) * 100:.2f}%")
     except Exception as e:
         print(f"Error in test_quantization: {e}")
         raise
 
-def main():
-    """
-    Main function for testing.
-    """
-    try:
-        # Get command line arguments
-        args = get_args()
-        
-        # Set device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {device}")
-        
-        # Set GPU devices
-        if torch.cuda.is_available():
-            os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
-        
-        # Test pruning criteria
-        if args.test_criteria:
-            test_pruning_criteria(args)
-        
-        # Test global pruning
-        elif args.test_global:
-            test_global_pruning(args)
-        
-        # Test iterative pruning
-        elif args.test_iterative:
-            test_iterative_pruning(args)
-        
-        # Test quantization
-        elif args.test_quantization:
-            test_quantization(args)
-        
-        # Regular testing
-        else:
-            # Get test loader
-            test_loader = get_test_loader(args)
-            
-            # Get model
-            if args.net == 'vgg16':
-                model = MyVgg16(10)
-            else:
-                model = MyResNet34()
-            
-            # Load model
-            load_path = os.path.join("./checkpoint", args.net, "train", "bestParam.pth")
-            if os.path.exists(load_path):
-                model.load_state_dict(torch.load(load_path, map_location=device))
-                print(f"Loaded model from {load_path}")
-            else:
-                print(f"Warning: Model checkpoint not found at {load_path}")
-            
-            # Set up model for testing
-            if torch.cuda.device_count() > 1:
-                model = nn.DataParallel(model)
-            model = model.to(device)
-            
-            # Test model
-            test_model(model, test_loader, args)
-    except Exception as e:
-        print(f"Error in main: {e}")
-        raise
-
 if __name__ == '__main__':
-    main()
+    args = get_args()
+    
+    if hasattr(args, 'test_criteria') and args.test_criteria:
+        test_pruning_criteria(args)
+    elif hasattr(args, 'test_global') and args.test_global:
+        test_global_pruning(args)
+    elif hasattr(args, 'test_iterative') and args.test_iterative:
+        test_iterative_pruning(args)
+    elif hasattr(args, 'test_quantization') and args.test_quantization:
+        test_quantization(args)
+    else:
+        # Get test loader
+        test_loader = get_test_loader(args)
+        
+        # Get model
+        if args.net == 'vgg16':
+            model = MyVgg16(10)
+        else:
+            model = MyResNet34()
+        
+        # Load model
+        load_path = os.path.join("./checkpoint", args.net, "train", "bestParam.pth")
+        if os.path.exists(load_path):
+            model.load_state_dict(torch.load(load_path, map_location='cpu'))
+        else:
+            print(f"Warning: Model checkpoint not found at {load_path}")
+        
+        # Set up model for testing
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if torch.cuda.device_count() > 1:
+            model = nn.DataParallel(model)
+        model = model.to(device)
+        
+        # Test model
+        test_model(model, test_loader, args)
